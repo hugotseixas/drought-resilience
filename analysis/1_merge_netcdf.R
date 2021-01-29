@@ -1,96 +1,87 @@
-## ------------------------------------------------------------------------- ##
-####* ------------------------------- HEADER ---------------------------- *####
-## ------------------------------------------------------------------------- ##
-##
-#### Description ####
-##
-## Script name:   
-##
-## Description:    
-##                 
-##                
-##                 
-##                
-##                 
-##                
-##                
-##
-## Author:        Hugo Tameirao Seixas
-## Contact:       hugo.seixas@alumni.usp.br / tameirao.hugo@gmail.com
-##
-## Date created:  
-## Last update:   
-## Last tested:   
-##
-## Copyright (c) Hugo Tameirao Seixas, 2020
-##
-## ------------------------------------------------------------------------- ##
-##
-## Notes:           
-##                  
-##                               
-##
-## ------------------------------------------------------------------------- ##
-##
-#### Libraries ####
-##
+# HEADER ----------------------------------------------------------------------
+#
+# Title:        Merge NetCDF data
+# Description:  In this routine we calculate monthly sums of selected variables
+#               from the daily outputs from NOAH-MP and concatenate them in
+#               a single file for each scenario.
+#
+# Author:       Hugo Tameirao Seixas
+# Contact:      tameirao.hugo@gmail.com
+# Date:         2019-05-01
+#
+# Notes:        Versions of software and libraries used in this  
+#               routine are detailed in the documentation located  
+#               in the project directory.      
+#
+# LIBRARIES -------------------------------------------------------------------
+#
+library(fs)
+library(lubridate)
+library(glue)
+library(furrr)
+library(tidyverse)
+#
+# OPTIONS ---------------------------------------------------------------------
+#
+plan(multisession, workers = 10) # Plan parallel processing
+#
+## List all scenarios folders ----
+dlist <- dir_ls('./data/noah_out/', regexp = "scen")
 
-##
-## ------------------------------------------------------------------------- ##
-##
-#### Options ####
-##
-options(scipen = 6, digits = 4) # View outputs in non-scientific notation
-##
-## ------------------------------------------------------------------------- ##
-####* ------------------------------- CODE ------------------------------ *####
-## ------------------------------------------------------------------------- ##
-
-ylist <- seq(from = 2003, to = 2012)
-
-dlist <- dir('./data/noah_out/', pattern = 'scen')
-
-for (d in seq_along(dlist)) {
-  
-  print(dlist[d])
-  
-  for (y in seq_along(ylist)) {
+## Calculate monthly sums and concatenate files ----
+walk(
+  .x = dlist,
+  function(dir) {
     
-    print(ylist[y])
+    # Get scenario number
+    scen <- 
+      str_extract(
+        string = dir, 
+        pattern = glue("(?<=./data/noah_out/).*")
+      )
     
-    system(paste(
-      'cdo -daysum -selvar,GPP,LAI,LH,RAINRATE,TRAD -cat ../', 
-      dlist[d],
-      '/',
-      ylist[y],
-      '* ../merged/',
-      dlist[d], 
-      '_', 
-      ylist[y], 
-      '.nc', 
-      sep = ''
-    ))
+    cat(scen, "\n")
+    
+    # Get all the files of scenario
+    flist <- dir_ls(dir)
+    
+    # Get the years
+    ylist <- 
+      unique(
+        year(
+          ymd_h(
+            str_extract(
+              string = flist, 
+              pattern = glue("(?<={dir}/).*(?=.LDASOUT_DOMAIN1_sub)")
+            )
+          )
+        )
+      )
+      
+    # Calculate the sum for each month of each year
+    future_walk(
+      .x = ylist,
+      function(year) {
+        
+        cat(year, "\n")
+        
+        system(
+          glue(
+            "cdo -s -monsum -selvar,GPP,LAI,LH,RAINRATE,TRAD -cat ",
+            "{dir}/{year}* ./data/noah_out/merged/{scen}_{year}.nc"
+          )
+        )
+        
+      }
+    )
+    
+    # Concatenate the monthly sum files
+    system(
+      glue(
+        "cdo -s -cat ./data/noah_out/merged/{scen}* ",
+        "./data/noah_out/scenarios/{scen}.nc"
+      )
+    )
     
   }
-  
-}
-
-for (d in seq_along(dlist)) {
-  
-  print(dlist[d])
-  
-  system(paste(
-    'cdo -cat ../merged/', 
-    dlist[d], 
-    '* ../merged/', 
-    dlist[d], 
-    '.nc', 
-    sep = ''
-  ))
-  
-}
-
-
-## ------------------------------------------------------------------------- ##
-####* ------------------------------- END ------------------------------- *####
-## ------------------------------------------------------------------------- ##
+)
