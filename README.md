@@ -46,7 +46,7 @@ This is a list of required software and libraries, along with their version at t
 
 - lubridate (1.79)
 - kableExtra (1.1.0)
-- tidyverse (1.3.0)**
+- tidyverse (1.3.0)
   - ggplot2 (3.3.1)
   - tibble (3.0.1)
   - tidyr (1.1.0)
@@ -61,17 +61,6 @@ This is a list of required software and libraries, along with their version at t
 
 *The use of Rstudio is optional but advised
 
-**If you prefer, you don't need to install the tidyverse library, and otherwise install separately its forming libraries. This shouldn't have an impact on functionality of the code, but it would be necessary to modify all scripts and add each of the tidyverse packages as shown below.
-
-    library(ggplot2)
-    library(tibble)
-    library(tidyr)
-    library(readr)
-    library(purrr)
-    library(dplyr)
-    library(stringr)
-    library(forcats)
-
 ## Authors
 
   - **Hugo Tameirão Seixas** - *Wrote the codes* -
@@ -82,13 +71,6 @@ This is a list of required software and libraries, along with their version at t
 This project is licensed under the MIT License - see the [LICENSE.md](LICENSE.md) file for details
 
 ## Acknowledgments
-
-The headers of the scripts were based on the template created by Dr. Timothy Farewell, available in his website: 
-[https://timfarewell.co.uk/my-r-script-header-template/](https://timfarewell.co.uk/my-r-script-header-template/)
-
-The project documentation was based on Billie Thompson models available on her github page:
-[https://github.com/PurpleBooth](https://github.com/PurpleBooth)
-
 
 ## Contact
 
