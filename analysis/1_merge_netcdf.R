@@ -29,7 +29,7 @@ plan(multisession, workers = 10) # Plan parallel processing
 dlist <- dir_ls('./data/noah_out/', regexp = "scen")
 
 ## Calculate monthly sums and concatenate files ----
-walk(
+future_walk(
   .x = dlist,
   function(dir) {
     
@@ -59,7 +59,7 @@ walk(
       )
       
     # Calculate the sum for each month of each year
-    future_walk(
+    walk(
       .x = ylist,
       function(year) {
         
