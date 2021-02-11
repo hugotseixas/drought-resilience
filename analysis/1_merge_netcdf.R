@@ -27,7 +27,7 @@ library(tidyverse)
 ## List all scenarios folders ----
 dlist <- 
   dir_ls(
-    path = "/media/hugo/NOAH/drought-resilience/data/noah_out/", 
+    path = "data/noah_out/", 
     regexp = "scen_"
   )
 
