@@ -18,18 +18,21 @@
 library(fs)
 library(lubridate)
 library(glue)
-library(furrr)
 library(tidyverse)
 #
 # OPTIONS ---------------------------------------------------------------------
 #
-plan(multisession, workers = 10) # Plan parallel processing
+
 #
 ## List all scenarios folders ----
-dlist <- dir_ls('./data/noah_out/', regexp = "scen")
+dlist <- 
+  dir_ls(
+    path = "/media/hugo/NOAH/drought-resilience/data/noah_out/", 
+    regexp = "scen_"
+  )
 
 ## Calculate monthly sums and concatenate files ----
-future_walk(
+walk(
   .x = dlist,
   function(dir) {
     
@@ -67,7 +70,7 @@ future_walk(
         
         system(
           glue(
-            "cdo -s -monsum -selvar,GPP,LAI,LH,RAINRATE,TRAD -cat ",
+            "cdo -s -monsum -selvar,GPP,RAINRATE -cat ",
             "{dir}/{year}* ./data/noah_out/merged/{scen}_{year}.nc"
           )
         )
