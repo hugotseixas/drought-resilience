@@ -24,6 +24,8 @@ library(tidyverse)
 #
 
 #
+# MERGE NETCDF FILES ----------------------------------------------------------
+
 ## List all scenarios folders ----
 dlist <- 
   dir_ls(
