@@ -1,740 +1,668 @@
-## ------------------------------------------------------------------------- ##
-####* ------------------------------- HEADER ---------------------------- *####
-## ------------------------------------------------------------------------- ##
-##
-#### Description ####
-##
-## Script name:   Sampling analysis
-##
-## Description:   description 
-##                 
-##                
-##                 
-##                
-##                 
-##                
-##                
-##
-## Author:        Hugo Tameirao Seixas
-## Contact:       hugo.seixas@alumni.usp.br / tameirao.hugo@gmail.com
-##
-## Date created:  Fourth quarter 2019
-## Last update:   2020-06-17
-## Last tested:   2020-06-17
-##
-## Copyright (c) Hugo Tameirao Seixas, 2020
-##
-## ------------------------------------------------------------------------- ##
-##
-## Notes:         Versions of software and libraries used in this  
-##                routine are detailed in the readme file located  
-##                in the project directory.               
-##
-## ------------------------------------------------------------------------- ##
-##
-#### Options ####
-##
-options(scipen = 6, digits = 4) # View outputs in non-scientific notation
-##
-## ------------------------------------------------------------------------- ##
-##
-#### Libraries ####
-##
+# HEADER ----------------------------------------------------------------------
+#
+# Title:        Sampling analysis
+# Description:  
+#
+# Author:       Hugo Tameirao Seixas
+# Contact:      tameirao.hugo@gmail.com
+# Date:         2019-05-01
+#
+# Notes:        Versions of software and libraries used in this  
+#               routine are detailed in the documentation located  
+#               in the project directory.      
+#
+# LIBRARIES -------------------------------------------------------------------
+#
+library(arrow)
 library(rlang)
+library(glue)
 library(rstatix)
 library(kableExtra)
 library(cowplot)
+library(scales)
+library(ggridges)
 library(tidyverse)
-##
-## ------------------------------------------------------------------------- ##
-####* ------------------------------- CODE ------------------------------ *####
-## ------------------------------------------------------------------------- ##
+#
+# OPTIONS ---------------------------------------------------------------------
+#
+options(scipen = 6, digits = 4) # View outputs in non-scientific notation
+#
+# LOAD AND FILTER DATA --------------------------------------------------------
 
-#### ----------------------------------------------------------- Load data ####
+## Load data ----
+res_metrics <- 
+  read_parquet('./data/resilience_metrics.parquet')
 
-####' ----- Load data and change order of category variables #### 
-res_metrics <- read_delim('./data/area_filtered.txt', delim = ',') %>%
+## Filter data ----
+res_metrics <- res_metrics %>%
+  filter(
+    impact > 0.10, # Low values of impact have a big effect on some results
+    veg_type >= 7, veg_type <= 10, # Most common veg types in the area
+    soil_type == 7, # Will analyze only one type of soil (predominant)
+    drought_duration <= 2 # Only droughts of two or less years
+  ) %>%
+  select(id, scenario, veg_type, variable, stability:recovery_impact)
+
+## Reorder and rename factors ----
+res_metrics <- res_metrics %>%
   mutate(
-    Recovery_Intensity = fct_relevel(
-      Recovery_Intensity, 'W1', 'W2', 'W3', 'N'
-    ),
-    Vegetation = fct_relevel(
-      Vegetation, 'Open Shrublands', 'Woody Savannas', 'Savannas', 'Grasslands'
+    veg_type = factor(
+      veg_type,
+      labels = c('Open Shrublands', 'Woody Savannas', 'Savannas', 'Grasslands')
     )
   )
 
-####' ----- Filter data #### 
-
-res_metrics <- res_metrics %>%
-  filter(as.integer(Drought_Duration) <= 2, Soil == 7)
-
-#### ---------------------------------------------------- Perform sampling ####
-
-####' ----- Perform stratified sampling ####  
-
-set.seed(2020)
-
-## Get 400 observations for each vegetation type (10000 iterations)
-sample <- bind_rows(
-  replicate(
-    10000, # Number of replications
-    res_metrics %>% group_by(Vegetation) %>% slice_sample(n = 400), 
-    simplify = FALSE
-    ), 
-  .id = "Obs"
+## Convert to wide format ----
+res_metrics_wide <- res_metrics %>%
+  pivot_wider(
+    id_cols = c(id, scenario, veg_type),
+    values_from = stability:recovery_impact,
+    names_from = variable,
+    names_glue = "{variable}_{.value}"
   )
-## Nest data
-sample <- sample %>%
-  group_by(Obs, Vegetation) %>%
-  group_nest()
 
-rm(res_metrics)
-gc()
+# PERFORM SAMPLING ------------------------------------------------------------
 
-#### ----------------------------------------------- Create some functions ####
+## Set sampling parameters ----
 
-####' ----- Functions to fit and apply linear regression #### 
-fit_lm_on_sample <- function(sample_data) {
-  lm(formula, sample_data)
-}
+# Ensure reproducibility of results
+set.seed(2021)
 
-apply_lm_on_sample <- function() {
-  
-  sample_regression <- sample %>%
-    mutate(model = map(data, fit_lm_on_sample), coef_info = map(model, tidy)) 
-  
-  return(sample_regression)
-  
-}
+# Set number of samples to perform
+rep_number <- 500
 
-augment_lm <- function() {
-  
-  ## Augment model data (so we get the fitted values, residuals, etc...)
-  augmented <- sample_regression %>%
-    mutate(augmented = map(model, augment)) %>% 
-    unnest(cols = augmented) %>%
-    mutate(.fitted = if_else(.fitted < 0, 0, .fitted))
-  
-  return(augmented)
-  
-}
+# Set sample size
+sample_size <- 500
 
-####' ----- Function to calculate confidence intervals #### 
-reg_ic <- function(dependent, independent) {
-  
-  range <- augmented %>%
-    group_by(Vegetation) %>% # 
-    summarise(max = max(!!sym(independent)), min = min(!!sym(independent))) %>%
-    group_nest(Vegetation) %>%
-    # Create a sequence of 100 numbers that ranges from the min to the max
-    # of the independent variable
-    mutate(!!independent := map(data, ~seq(
-      from = pull(.x %>% select(min)),
-      to = pull(.x %>% select(max)),
-      length.out = 100
-      ))) %>% 
-    select(-data) %>% 
-    unnest(cols = !!independent) %>% 
-    group_nest(Vegetation) 
-  
-  ## Apply models of each sampling iteration to the range of 
-  ## values created above
-  confidence_interval <- sample_regression %>%
-    select(Vegetation, model) %>% 
-    group_nest(Vegetation) %>% 
-    right_join(range, by = 'Vegetation') %>% 
-    unnest(cols = data.x) %>% 
-    # Predict the dependent variable for the range of values of independent var
-    mutate(Fitted = map2(model, data.y, predict)) %>% 
-    unnest(cols = c(data.y, Fitted)) %>% 
-    select(-model)
-  
-  ## Estimate confidence intervals for the regressions
-  ci <- confidence_interval %>%
-    group_by(Vegetation, !!sym(independent)) %>% 
-    summarise(
-      low = quantile(Fitted, 0.025),
-      high = quantile(Fitted, 0.975)
-      ) %>%
-    mutate_at(vars(low, high), list(~if_else(. < 0, 0, .)))
-  
-  return(ci)
-  
-}
+## Perform sampling ----
+sample <-
+  map_dfr(
+    .x = 1:rep_number,
+    .f = 
+      ~ {
+        
+        res_metrics_wide %>%
+          group_by(veg_type) %>%
+          slice_sample(n = sample_size) %>%
+          mutate(sample_id = .x)
+        
+      }
+  )
 
-####' ----- Functions to create regression plots #### 
-## Plots regression for Impact x Recovery
-reg_plot_1 <- function(lab_x, lab_y) {
-  
-  p <- augmented %>%
-    ggplot(aes(x = Impact)) +
-    ## Linear regression using all the sampled data from each vegetation
-    stat_smooth(
-      aes(y = .fitted, color = Vegetation, group = Vegetation), 
-      size = 0.5, 
-      formula = y ~ x,
-      method = 'lm'
-    ) + 
-    ## Estimated confidence interval of each vegetation type
-    geom_ribbon(
-      data = ci, 
-      aes(
-        x = Impact, 
-        ymin = low, 
-        ymax = high, 
-        group = Vegetation, 
-        fill = Vegetation
-      ), 
-      alpha = 0.3, 
-      inherit.aes = FALSE
-    ) + 
-    scale_color_manual(values = c('#948307', '#4d2d04', '#079467', '#7b9407')) +
-    scale_fill_manual(values = c('#948307', '#4d2d04', '#079467', '#7b9407')) +
-    theme_bw() +
-    theme(
-      text = element_text(family = "sans", size = 11), 
-      legend.position = ''
-    ) +
-    labs(x = lab_x, y = lab_y) +
-    xlim(0, 1)
-  
-  return(p)
-  
-}
+# PERFORM ANALYSIS ----
 
-## Plots regressions for precipitation x vegetation components
-reg_plot_2 <- function(independent, lab_x, lab_y, lim) {
-  
-  p <- augmented %>%
-    ggplot(aes(x = !!sym(independent))) +
-    ## Linear regression using all the sampled data from each vegetation
-    stat_smooth(
-      aes(y = .fitted, color = Vegetation, group = Vegetation), 
-      size = 0.5, 
-      method = 'lm', 
-      formula = y ~ x, 
-      se = FALSE
-      ) + 
-    ## Estimated confidence interval of each vegetation type
-    geom_ribbon(
-      data = ci, 
-      aes(
-        x = !!sym(independent), 
-        ymin = low, 
-        ymax = high, 
-        group = Vegetation, 
-        fill = Vegetation
+## Set the related variables ----
+variables_table <-
+  tibble(
+    independent = c(
+      "gpp_impact", "gpp_impact", 
+      "precip_impact", "precip_recovery_base",
+      "precip_recovery_impact", "precip_stability"
+    ),
+    dependent = c(
+      "gpp_recovery_base", "gpp_recovery_impact",
+      "gpp_impact", "gpp_recovery_base",
+      "gpp_recovery_impact", "gpp_stability"
+    )
+  )
+
+## Create a list of nested tibbles with paired variables ----
+paired_variables <- variables_table %>%
+  pmap(
+    function(...) {
+      
+      variables <- tibble(...)
+      
+      # Select variables and nest rows
+      variables <- sample %>%
+        select(
+          id, veg_type, scenario, 
+          sample_id, variables$independent, variables$dependent
+        ) %>%
+        group_by(sample_id, veg_type) %>%
+        group_nest()
+      
+      return(variables)
+      
+    }
+  ) %>%
+  set_names(
+    glue("{variables_table$dependent} ~ {variables_table$independent}")
+  )
+
+## Fit and apply linear model ----
+# Gets the linear model formula from each element name from list
+reg_paired_variables <- paired_variables %>%
+  imap(
+    .f = ~ {
+      
+      # Name variable with the formula
+      formula <- .y
+      
+      # Apply linear regression
+      sample_regression <- .x %>%
+        mutate(
+          model = map(
+            data, 
+            function(sample_data) { lm(formula, sample_data) }
+          ), 
+          coef_info = map(model, tidy)
+        ) %>%
+        # Augment model data (so we get the fitted values, residuals, etc...)
+        mutate(augmented = map(model, augment)) %>% 
+        unnest(cols = augmented)
+      
+      return(sample_regression)
+      
+    }
+  )
+
+## Calculate confidence intervals ----
+ci_paired_variables <- reg_paired_variables %>%
+  imap(
+    .f = ~ {
+      
+      # Get name of dependent variable
+      dependent <- names(.x)[7]
+      
+      # Get name of independent variable
+      independent <- names(.x)[8]
+      
+      range <- .x %>%
+        group_by(veg_type) %>%
+        summarise(
+          max = max(!!sym(independent)), 
+          min = min(!!sym(independent)),
+          .groups = "keep"
+        ) %>%
+        group_nest() %>%
+        # Create a sequence of 100 numbers that ranges from the min to the max
+        # of the independent variable
+        mutate(
+          !!independent := map(
+            data, 
+            ~ seq(
+              from = pull(.x %>% select(min)),
+              to = pull(.x %>% select(max)),
+              length.out = 100
+            )
+          )
+        ) %>% 
+        select(-data) %>% 
+        unnest(cols = !!independent) %>% 
+        group_by(veg_type) %>%
+        group_nest() 
+      
+      # Apply models of each sampling iteration to the range of 
+      # values created above
+      confidence_interval <- .x %>%
+        select(sample_id, veg_type, model) %>% 
+        distinct(sample_id, veg_type, .keep_all = TRUE) %>%
+        group_by(veg_type) %>%
+        group_nest() %>% 
+        right_join(range, by = 'veg_type') %>% 
+        unnest(cols = data.x) %>% 
+        # Predict the dependent variable for the range 
+        # of values of independent var
+        mutate(fitted = map2(model, data.y, predict)) %>% 
+        unnest(cols = c(data.y, fitted)) %>% 
+        select(-model)
+      
+      # Estimate confidence intervals for the regressions
+      ci <- 
+        confidence_interval %>%
+        group_by(veg_type, !!sym(independent)) %>% 
+        summarise(
+          low = quantile(fitted, 0.025),
+          high = quantile(fitted, 0.975),
+          .groups = "keep"
+        ) %>%
+        mutate_at(vars(low, high), list( ~ if_else(. < 0, 0, .)))
+      
+      return(ci)
+      
+    }
+  )
+
+## Calculate mean average error ----
+mae_paired_values <- reg_paired_variables %>%
+  map_dfr(
+    .id = "formula",
+    .f = ~ {
+      
+      .x %>%
+        group_by(veg_type) %>%
+        summarise(
+          mae = mean(abs(.resid), na.rm = TRUE)
+        ) 
+      
+    }
+  )
+
+## Get the lm coefficients ----
+reg_coef <-
+  map2_dfr(
+    .x = reg_paired_variables[3:6], 
+    .y = c("Impact", "Recovery[b]", "Recovery[i]", "Stability"),
+    .f = 
+      ~ {
+        
+        .x %>%
+          select(sample_id, veg_type, coef_info) %>%
+          distinct(sample_id, veg_type, .keep_all = TRUE) %>%
+          unnest(cols = coef_info) %>%
+          select(sample_id, veg_type, term, estimate) %>%
+          mutate(
+            term = if_else(term == "(Intercept)", "Intercept", "Slope"),
+            metric = .y
+          )
+        
+      }
+  )
+
+## Calculate ratio between precip and gpp components ----
+ratio_median <-
+  map2_dfr(
+    .x = reg_paired_variables[3:6], 
+    .y = c("Impact", "Recovery[b]", "Recovery[i]", "Stability"),
+    .f = 
+      ~ {
+        
+        .x %>%
+          select(1, 2, 7, 8) %>%
+          rename(gpp = 3, precip = 4) %>%
+          group_by(sample_id, veg_type) %>%
+          mutate(ratio = gpp / precip) %>%
+          summarise(median = median(ratio), .groups = "drop") %>%
+          mutate(metric = .y)
+        
+      }
+  )
+
+# CREATE PLOTS ----------------------------------------------------------------
+
+### Create residuals plots ----
+residuals_plots <- 
+  map(
+    .x = reg_paired_variables,
+    .f = ~ {
+      
+      sp1 <- .x %>%
+        group_by(veg_type) %>%
+        slice_sample(n = 3000) %>%
+        ggplot(aes(x = .resid)) +
+        geom_histogram(fill = 'gray', bins = 30) +
+        theme_dark(10) +
+        scale_x_continuous(breaks = breaks_pretty(3)) +
+        theme(
+          text = element_text(family = "sans", size = 5), 
+          axis.text.y  = element_blank(), 
+          plot.margin = unit(c(0, 0, 0, 0), "cm"),
+          axis.ticks.y = element_blank(),
+          panel.grid.major.y = element_blank(),
+          panel.grid.minor.y = element_blank(),
+          plot.background = element_rect(fill = "transparent", color = NA), 
+          aspect.ratio = 0.9
+        ) +
+        labs(x = 'Residuals', y = 'Count')
+      
+      sp2 <- .x %>%
+        group_by(veg_type) %>%
+        slice_sample(n = 3000) %>%
+        ggplot(aes(x = .fitted, y = .resid)) +
+        geom_hex() +
+        geom_hline(yintercept = 0, linetype = 'dashed', size = 0.3) +
+        scale_x_continuous(breaks = breaks_pretty(2)) +
+        scale_fill_gradient(low = "gray", high = "black") +
+        theme_dark(10) +
+        theme(
+          text = element_text(family = "sans", size = 5), 
+          legend.position = '',
+          plot.margin = unit(c(0, 0, 0, 0.1), "cm"),
+          plot.background = element_rect(fill = "transparent", color = NA), 
+          aspect.ratio = 0.9
+        ) +
+        labs(x = 'Fitted', y = 'Residuals')
+      
+      spr <- plot_grid(sp1, sp2, align = 'hv', axis = 'l')
+      
+      return(spr)
+      
+    }
+  )
+
+### Create first set of plots (gpp_impact x gpp_recovery) ----
+regression_plots <- 
+  pmap(
+  .l = list(
+    augmented = reg_paired_variables[1:2],
+    ci = ci_paired_variables[1:2],
+    lab_x = list('VI~(Vegetation~Impact)', 'VI~(Vegetation~Impact)'),
+    lab_y = list(
+      'VR[b]~(Vegetetion~Recovery[b])',
+      'VR[i]~(Vegetetion~Recovery[i])'
+    )
+  ),
+  function(augmented, ci, lab_x, lab_y) {
+    
+    p <- augmented %>%
+      ggplot(aes(x = gpp_impact)) +
+      # Linear regression using all the sampled data from each vegetation
+      stat_smooth(
+        aes(y = .fitted, color = veg_type, group = veg_type), 
+        size = 0.5,
+        formula = y ~ x,
+        method = 'lm'
+      ) +
+      # Estimated confidence interval of each vegetation type
+      geom_ribbon(
+        data = ci, 
+        aes(
+          x = gpp_impact, 
+          ymin = low, 
+          ymax = high, 
+          group = veg_type, 
+          fill = veg_type
         ), 
-      alpha = 0.3, 
-      inherit.aes = FALSE
+        alpha = 0.3, 
+        inherit.aes = FALSE
+      ) + 
+      scale_color_manual(
+        values = c('#948307', '#4d2d04', '#079467', '#7b9407')
       ) +
-    geom_abline(
-      intercept = 0, 
-      slope = 1, 
-      linetype = 'dashed', 
-      size = 0.7, 
-      color = 'black', 
-      alpha = 0.8
+      scale_fill_manual(
+        values = c('#948307', '#4d2d04', '#079467', '#7b9407')
       ) +
-    scale_color_manual(values = c('#948307', '#4d2d04', '#079467', '#7b9407')) +
-    scale_fill_manual(values = c('#948307', '#4d2d04', '#079467', '#7b9407')) +
-    theme_bw() +
-    theme(
-      text = element_text(family = "sans", size = 11), 
-      legend.position = ''
+      theme_bw() +
+      theme(
+        text = element_text(family = "sans", size = 11), 
+        legend.position = ''
       ) +
-    labs(x = lab_x, y = lab_y) +
-    xlim(0, lim) + ylim(0, lim)
-  
-  return(p)
-  
-}
+      labs(x = parse_expr(lab_x), y = parse_expr(lab_y)) +
+      xlim(0, 1)
+    
+    return(p)
+    
+  }
+)
 
-## Plots residuals distribution
-res_dist_plot <- function() {
-  
-  sp1 <- augmented %>%
-    group_by(Vegetation) %>%
-    slice_sample(n = 3000) %>%
-    ggplot(aes(x = .resid)) +
-    geom_histogram(fill = 'gray', bins = 30) +
-    theme_dark(10) +
-    theme(
-      text = element_text(family = "sans", size = 6), 
-      axis.text.y  = element_blank(), 
-      plot.margin = unit(c(0, 0, 0, 0), "cm"),
-      plot.background = element_rect(fill = "transparent", color = NA), 
-      aspect.ratio = 0.9
-    ) +
-    labs(x = 'Residuals', y = 'Count')
-  
-  return(sp1)
-  
-}
-
-## Create residual x fitted scatter plot
-res_fit_plot <- function() {
-  
-  sp2 <- augmented %>%
-    group_by(Vegetation) %>%
-    slice_sample(n = 3000) %>%
-    ggplot(aes(x = .fitted, y = .resid)) +
-    geom_hex() +
-    geom_hline(yintercept = 0, linetype = 'dashed') +
-    scale_fill_gradient(low = "gray", high = "black") +
-    theme_dark(10) +
-    theme(
-      text = element_text(family = "sans", size = 6), 
-      legend.position = '', 
-      axis.text.y  = element_blank(), 
-      plot.margin = unit(c(0, 0, 0, 0.1), "cm"),
-      plot.background = element_rect(fill = "transparent", color = NA), 
-      aspect.ratio = 0.9
-    ) +
-    labs(x = 'Fitted', y = 'Residuals')
-  
-  return(sp2)
-  
-} 
-
-####' ----- Function to test difference between lm factors #### 
-## Test differences between slopes
-lm_diff_test <- function() {
-  
-  factors_diff <- sample_regression %>%
-    unnest(cols = coef_info) %>%
-    select(Obs, Vegetation, term, estimate) %>%
-    spread(key = Vegetation, value = estimate) %>%
-    mutate(
-      'OS - WS' = `Open Shrublands` - `Woody Savannas`,
-      'OS - S' = `Open Shrublands` - Savannas,
-      'OS - G' = `Open Shrublands` - Grasslands,
-      'WS - S' = `Woody Savannas` - Savannas,
-      'WS - G' = `Woody Savannas` - Grasslands,
-      'S - G' = Savannas - Grasslands
-      ) %>%
-    select('Obs', term, 'OS - WS':'S - G') %>%
-    gather(key = Diff, value = Value, 'OS - WS':'S - G') %>%
-    group_by(term, Diff) %>%
-    filter(Value < quantile(Value, 0.975), Value > quantile(Value, 0.025)) %>%
-    group_nest() %>%
-    mutate(condition = map(
-      data, 
-      ~.x %>% 
-        summarise(sign = max(Value) * min(Value)) %>% 
-        mutate(Test = case_when(sign <= 0 ~ FALSE, sign >= 0 ~ TRUE))
-      )) %>%
-    unnest(cols = condition) %>%
-    select(-sign) %>%
-    unnest(cols = data)
-  
-  return(factors_diff)
-}
-
-####' ----- Function to test difference between medians #### 
-median_diff_test <- function() {
-
-  ## Test the differences for each components of resilience
-  median_diff <- sample_components %>% 
-    group_by(Obs, Vegetation) %>%
-    summarise_at(vars(Impact:Stability), median) %>%
-    gather(key = Metric, value = Value, Impact:Stability) %>%
-    group_by(Obs, Vegetation) %>%
-    mutate(id = row_number()) %>%
-    spread(key = Vegetation, value = Value) %>%
-    mutate(
-      'OS - WS' = `Open Shrublands` - `Woody Savannas`,
-      'OS - S' = `Open Shrublands` - Savannas,
-      'OS - G' = `Open Shrublands` - Grasslands,
-      'WS - S' = `Woody Savannas` - Savannas,
-      'WS - G' = `Woody Savannas` - Grasslands,
-      'S - G' = Savannas - Grasslands
-    ) %>%
-    select('Obs':id, 'OS - WS':'S - G') %>%
-    gather(key = Diff, value = Value, 'OS - WS':'S - G') %>%
-    group_by(Metric, Diff) %>%
-    filter(Value < quantile(Value, 0.975), Value > quantile(Value, 0.025)) %>%
-    group_nest() %>%
-    mutate(condition = map(
-      data, 
-      ~.x %>% 
-        summarise(sign = max(Value) * min(Value)) %>% 
-        mutate(Test = case_when(sign <= 0 ~ FALSE, sign >= 0 ~ TRUE))
-    )) %>%
-    unnest(cols = condition) %>%
-    select(-sign) %>%
-    unnest(cols = data)
-  
-  return(median_diff)
-  
-}
-
-#### ----------------------- Fit models, test differences and create plots #### 
-
-####' ----- Impact x Recovery_Base #### 
-## Set formula
-formula <- 'Recovery_Base ~ Impact' 
-## Apply linear model
-sample_regression <- apply_lm_on_sample()
-## Augment model data (so we get the fitted values, residuals, etc...)
-augmented <- augment_lm() 
-## Calculate confidence interval
-ci <- reg_ic(dependent = 'Recovery_Base', independent = 'Impact')
-## Create plot of regressions and its confidence intervals
-p1 <- reg_plot_1(
-  lab_x = parse_expr('VI~(Vegetation~Impact)'), 
-  lab_y = parse_expr('VR[b]~(Vegetetion~Recovery[b])')
+# Get legend
+legend <- 
+  get_legend(
+    regression_plots[[1]] + 
+      theme(legend.position = 'bottom', legend.title = element_blank())
   )
-## Create plot of residuals distribution
-sp1 <- res_dist_plot()
-## Create scatter plot of residuals against fitted values 
-sp2 <- res_fit_plot()
-## Create panel of subplots
-spr1 <- plot_grid(sp1, sp2, align = 'hv', axis = 'l')
-## Get legend
-legend <- get_legend(p1 + theme(
-  legend.position = 'bottom', 
-  legend.title = element_blank()
-  ))
 
-####' ----- Impact x Recovery_Impact  #### 
-## Set formula
-formula <- 'Recovery_Impact ~ Impact' 
-## Apply linear regression
-sample_regression <- apply_lm_on_sample()
-## Augment model data (so we get the fitted values, residuals, etc...)
-augmented <- augment_lm()
-## Calculate confidence interval
-ci <- reg_ic(dependent = 'Recovery_Impact', independent = 'Impact')
-## Create plot of regressions and its confidence intervals
-p2 <- reg_plot_1(
-  lab_x = parse_expr('VI~(Vegetation~Impact)'), 
-  lab_y = parse_expr('VR[i]~(Vegetetion~Recovery[i])')
+# Merge the plots created above
+prow <- 
+  plot_grid(
+    regression_plots[[1]], regression_plots[[2]], 
+    labels = c('a', 'b'), 
+    axis = 'lrbt',
+    align = 'hv',
+    label_size = 11, 
+    label_x = 0.20,
+    label_y = 1.035
   )
-## Create plot of residuals distribution
-sp1 <- res_dist_plot() 
-## Create scatter plot of residuals against fitted values
-sp2 <- res_fit_plot()
-## Create panel of subplots
-spr2 <- plot_grid(sp1, sp2, align = 'hv', axis = 'l')
 
-####' ----- Create first set of plots (Impact x Recovery) #### 
-## Merge the plots created above
-prow <- plot_grid(
-  p1, p2, 
-  labels = c('a', 'b'), 
-  axis = 'lrbt',
-  align = 'hv',
-  label_size = 11, 
-  label_x = 0.14,
-  label_y = 1.03
+# Add legend below the plot
+fp <- 
+  plot_grid(
+    ggplot() + theme_nothing(), prow, legend, 
+    ncol = 1, 
+    rel_heights = c(0.025, 1, 0.1)
   )
-## Add legend below the plot
-fp <- plot_grid(
-  ggplot() + theme_nothing(), prow, legend, 
-  ncol = 1, 
-  rel_heights = c(0.025, 1, 0.1)
-  )
-## Add subplots
-fp <- ggdraw() + 
+
+# Add subplots
+fp <- 
+  ggdraw() + 
   draw_plot(fp) + 
-  draw_plot(spr1, x = 0.093, y = 0.32, width = 0.25) +
-  draw_plot(spr2, x = 0.727, y = 0.32, width = 0.25)
-## Save plot
+  draw_plot(residuals_plots[[1]], x = 0.093, y = 0.32, width = 0.25) +
+  draw_plot(residuals_plots[[2]], x = 0.727, y = 0.32, width = 0.25)
+
+# Save plot
 ggsave2('./plots/reg_1.pdf', fp, height = 8, width = 15, units = 'cm')
 
-## Clear objects
-rm(
-  ci, fp, legend, p1, p2, prow, 
-  sample_regression, sp1, sp2, 
-  spr1, spr2, augmented)
-gc()
-
-####' ----- Precipitation Decrease x Impact ####
-## Set formula
-formula <- 'Impact ~ Precip_Impact' 
-## Apply linear regression
-sample_regression <- apply_lm_on_sample()
-## Augment model data (so we get the fitted values, residuals, etc...)
-augmented <- augment_lm()
-## Calculate confidence interval
-ci <- reg_ic(dependent = 'Impact', independent = 'Precip_Impact')
-## Create plot of regressions and its confidence intervals
-p1 <- reg_plot_2(
-  independent = 'Precip_Impact',
-  lab_x = parse_expr('PI~(Precipitation~Impact)'), 
-  lab_y = parse_expr('VI~(Vegetation~Impact)'),
-  lim = 1
+### Create second set of plots (gpp x precip) ----
+regression_plots <- 
+  pmap(
+    .l = list(
+      augmented = reg_paired_variables[3:6],
+      ci = ci_paired_variables[3:6],
+      lab_x = list(
+        'PI~(Precipitation~Impact)', 
+        'PR[b]~(Precipitation~Recovery[b])',
+        'PR[i]~(Precipitation~Recovery[i])',
+        'PS~(Precipitation~Stability)'
+      ),
+      lab_y = list(
+        'VI~(Vegetation~Impact)',
+        'VR[b]~(Vegetation~Recovery[b])',
+        'VR[i]~(Vegetation~Recovery[i])',
+        'VS~(Vegetation~Stability)'
+      ),
+      lim = list(1, 2.5, 12.5, 1)
+    ),
+    function(augmented, ci, lab_x, lab_y, lim) {
+      
+      # Get name of independent variable
+      independent <- names(augmented)[8]
+      
+      p <- 
+        augmented %>%
+        ggplot(aes(x = !!sym(independent))) +
+        ## Linear regression using all the sampled data from each vegetation
+        stat_smooth(
+          aes(y = .fitted, color = veg_type, group = veg_type), 
+          size = 0.5, 
+          method = 'lm', 
+          formula = y ~ x, 
+          se = FALSE
+        ) + 
+        # Estimated confidence interval of each vegetation type
+        geom_ribbon(
+          data = ci, 
+          aes(
+            x = !!sym(independent), 
+            ymin = low, 
+            ymax = high, 
+            group = veg_type, 
+            fill = veg_type
+          ), 
+          alpha = 0.3, 
+          inherit.aes = FALSE
+        ) +
+        geom_abline(
+          intercept = 0, 
+          slope = 1, 
+          linetype = 'dashed', 
+          size = 0.7, 
+          color = 'black', 
+          alpha = 0.8
+        ) +
+        scale_color_manual(
+          values = c('#948307', '#4d2d04', '#079467', '#7b9407')
+        ) +
+        scale_fill_manual(
+          values = c('#948307', '#4d2d04', '#079467', '#7b9407')
+        ) +
+        theme_bw() +
+        theme(
+          text = element_text(family = "sans", size = 11), 
+          legend.position = ''
+        ) +
+        labs(x = parse_expr(lab_x), y = parse_expr(lab_y)) +
+        xlim(0, lim) + ylim(0, lim)
+      
+      return(p)
+      
+    }
   )
-## Create plot of residuals distribution
-sp1 <- res_dist_plot() 
-## Create scatter plot of residuals against fitted values
-sp2 <- res_fit_plot()
-## Create panel of subplots
-spr1 <- plot_grid(sp1, sp2, align = 'hv', axis = 'l')
 
-## Test differences between lm factors
-fd1 <- lm_diff_test() %>%
-  mutate(Metric = 'Impact')
-
-####' ----- Precipitation Increase Base x Recovery Base #### 
-## Set formula
-formula <- 'Recovery_Base ~ Precip_Recovery_Base' 
-## Apply linear model
-sample_regression <- sample %>%
-  mutate(model = map(data, fit_lm_on_sample), coef_info = map(model, tidy))
-## Augment model data (so we get the fitted values, residuals, etc...)
-augmented <- augment_lm()
-## Calculate confidence interval
-ci <- reg_ic(dependent = 'Recovery_Base', independent = 'Precip_Recovery_Base')
-## Create plot of regressions and its confidence intervals
-p2 <- reg_plot_2(
-  independent = 'Precip_Recovery_Base',
-  lab_x = parse_expr('PR[b]~(Precipitation~Recovery[b])'),
-  lab_y = parse_expr('VR[b]~(Vegetation~Recovery[b])'),
-  lim = 2.5
+# Get legend
+legend <- 
+  get_legend(
+    regression_plots[[1]] + 
+      theme(legend.position = "bottom", legend.title = element_blank())
   )
-## Create plot of residuals distribution
-sp1 <- res_dist_plot() 
-## Create scatter plot of residuals against fitted values
-sp2 <- res_fit_plot()
-## Create panel of subplots
-spr2 <- plot_grid(sp1, sp2, align = 'hv', axis = 'l')
 
-## Test differences between lm factors
-fd2 <- lm_diff_test() %>%
-  mutate(Metric = 'Recovery[base]')
-
-####' ----- Precipitation Increase Impact x Recovery Impact ####
-## Set formula
-formula <- 'Recovery_Impact ~ Precip_Recovery_Impact' 
-## Apply linear model
-sample_regression <- apply_lm_on_sample()
-## Augment model data (so we get the fitted values, residuals, etc...)
-augmented <- augment_lm()
-## Calculate confidence interval
-ci <- reg_ic(
-  dependent = 'Recovery_Impact', 
-  independent = 'Precip_Recovery_Impact'
-)
-## Create plot of regressions and its confidence intervals
-p3 <- reg_plot_2(
-  independent = 'Precip_Recovery_Impact',
-  lab_x = parse_expr('PR[i]~(Precipitation~Recovery[i])'),
-  lab_y = parse_expr('VR[i]~(Vegetation~Recovery[i])'),
-  lim = 12.5
+# Create panel of plots
+prow <- 
+  plot_grid(
+    regression_plots[[2]], regression_plots[[3]], 
+    regression_plots[[1]], regression_plots[[4]],
+    labels = c('a', 'b', 'c', 'd'), 
+    axis = 'bt',
+    align = 'v',
+    label_size = 11,
+    label_x = 0.20,
+    label_y = 1.037
   )
-## Create plot of residuals distribution
-sp1 <- res_dist_plot() 
-## Create scatter plot of residuals against fitted values
-sp2 <- res_fit_plot()
-## Create panel of subplots
-spr3 <- plot_grid(sp1, sp2, align = 'hv', axis = 'l')
 
-## Test differences between lm factors
-fd3 <- lm_diff_test() %>%
-  mutate(Metric = 'Recovery[impact]')
-
-####' ----- Precipitation Stability x Stability ####
-## Set formula
-formula <- 'Stability ~ Precip_Stability' 
-## Apply linear model
-sample_regression <- apply_lm_on_sample()
-## Augment model data (so we get the fitted values, residuals, etc...)
-augmented <- augment_lm()
-## Calculate confidence interval
-ci <- reg_ic(dependent = 'Stability', independent = 'Precip_Stability')
-## Create plot of regressions and its confidence intervals
-p4 <- reg_plot_2(
-  independent = 'Precip_Stability',
-  lab_x = parse_expr('PS~(Precipitation~Stability)'), 
-  lab_y = parse_expr('VS~(Vegetation~Stability)'),
-  lim = 1
+# Insert legend in the bottom of the plot
+fp <- 
+  plot_grid(
+    ggplot() + theme_nothing(), prow, legend, 
+    ncol = 1,
+    rel_heights = c(0.01, 1, 0.1)
   )
-## Create plot of residuals distribution
-sp1 <- res_dist_plot() 
-## Create scatter plot of residuals against fitted values
-sp2 <- res_fit_plot()
-## Create panel of subplots
-spr4 <- plot_grid(sp1, sp2, align = 'hv', axis = 'l')
-## Get legend
-legend <- get_legend(p4 + theme(legend.position = 'bottom'))
 
-## Test differences between lm factors
-fd4 <- lm_diff_test() %>%
-  mutate(Metric = 'Stability') 
-
-####' ----- Create second set of plots (Precip x Vegetation) ####
-## Create panel of plots
-prow <- plot_grid(
-  p2, p3, p1, p4,
-  labels = c('a', 'b', 'c', 'd'), 
-  axis = 'bt',
-  align = 'v',
-  label_size = 11,
-  label_x = 0.16,
-  label_y = 1.035
-  ) 
-## Insert legend in the bottom of the plot
-fp <- plot_grid(
-  ggplot() + theme_nothing(), prow, legend, 
-  ncol = 1,
-  rel_heights = c(0.01, 1, 0.1)
-  )
-## Add subplots
-fp <- ggdraw() + 
+# Add subplots
+fp <- 
+  ggdraw() + 
   draw_plot(fp) + 
-  draw_plot(spr1, x = 0.23, y = -0.26, width = 0.25) +
-  draw_plot(spr2, x = 0.23, y = 0.19, width = 0.25) +
-  draw_plot(spr3, x = 0.605, y = 0.41, width = 0.25) +
-  draw_plot(spr4, x = 0.73, y = -0.26, width = 0.25)
-## Save plot
+  draw_plot(residuals_plots[[4]], x = 0.23, y = 0.19, width = 0.25) +
+  draw_plot(residuals_plots[[5]], x = 0.605, y = 0.41, width = 0.25) +
+  draw_plot(residuals_plots[[3]], x = 0.23, y = -0.26, width = 0.25) +
+  draw_plot(residuals_plots[[6]], x = 0.73, y = -0.26, width = 0.25)
+
+# Save plot
 ggsave2('./plots/reg_2.pdf', fp, height = 15, width = 15, units = 'cm')
 
-## Clear objects
-rm(
-  sample_regression, augmented, ci, formula,
-  fp, p1, p2, p3, p4, legend, prow,  
-  spr1, spr2, spr3, spr4, sp1, sp2
-)
-gc()
+## Create coefficients distribution plot ----
 
-####' ----- Create third set of plots (lm factors diff test) #### 
-## Create dummy data to make tag labels
-dummy <- tibble(
-  Metric = c(
-    'Recovery[b]', 'Recovery[i]', 'Impact', 'Stability',
-    'Recovery[b]', 'Recovery[i]', 'Impact', 'Stability'
+# Create dummy tibble to name and give labels in the plot
+dummy <- 
+  tibble(
+    metric = c(
+      'Recovery[b]', 'Recovery[i]', 'Impact', 'Stability',
+      'Recovery[b]', 'Recovery[i]', 'Impact', 'Stability'
     ),
-  Term = c(
-    'Intercept', 'Intercept', 'Intercept', 'Intercept',
-    'Slope', 'Slope', 'Slope', 'Slope'
+    term = c(
+      'Intercept', 'Intercept', 'Intercept', 'Intercept',
+      'Slope', 'Slope', 'Slope', 'Slope'
     ),
-  Label = c(
-    'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'
+    label = c(
+      'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'
+    ),
+    x_position = c(rep(-0.405, 4), rep(0.55, 4))
+  ) %>%
+  mutate(
+    metric = factor(
+      metric, 
+      levels = c('Recovery[b]', 'Recovery[i]', 'Impact', 'Stability')
+    )
+  )
+
+# Create plot
+reg_coef %>%
+  mutate(
+    metric = factor(
+      metric, 
+      levels = c('Recovery[b]', 'Recovery[i]', 'Impact', 'Stability')
     )
   ) %>%
-  mutate(
-    Metric = factor(
-      Metric, 
-      levels = c('Recovery[b]', 'Recovery[i]', 'Impact', 'Stability')
-    ))
-## Create plot
-fd1 %>% 
-  bind_rows(fd2, fd3, fd4) %>%
-  mutate(
-    Metric = factor(
-      Metric, 
-      levels = c('Recovery[base]', 'Recovery[impact]', 'Impact', 'Stability'),
-      labels = c('Recovery[b]', 'Recovery[i]', 'Impact', 'Stability')
-    ),
-    Term = case_when(term == '(Intercept)' ~ 'Intercept', TRUE ~ 'Slope')
-  ) %>%
   ggplot() +
-  facet_grid(Metric ~ Term, labeller = label_parsed) +
-  geom_line(aes(x = Value, y = Diff, color = Test, size = Test)) +
-  geom_vline(xintercept = 0, linetype = 'dashed') +
+  facet_grid(metric ~ term, labeller = label_parsed, scales = "free") +
+  stat_density_ridges(
+    aes(x = estimate, y = veg_type, fill = veg_type),
+    alpha = 0.7,
+    quantile_lines = TRUE,
+    quantiles = c(0.025, 0.975)
+  ) +
   geom_text(
     data = dummy, 
-    aes(x = -0.36, y = 6.1, label = Label), 
+    aes(x = x_position, y = 5, label = label), 
     fontface = 'bold', 
     size = 4
-    ) +
-  scale_color_manual(values = c('gray', 'black')) +
-  scale_size_manual(values = c(0.8, 1)) +
-  theme_bw() +
-  theme(
-    text = element_text(family = "sans", size = 11), 
-    legend.position = '', 
-    axis.title.y = element_blank()
   ) +
-  labs(x = 'Slope Difference') +
-  ggsave('./plots/factors_diff.pdf', width = 15, height = 15, units = 'cm')
-
-####' ----- Calculate ratio between precip and veg components ####
-sample_components <- sample %>%
-  unnest(cols = data) %>%
-  mutate(Impact = Impact/Precip_Impact,
-         Recovery_Base = Recovery_Base/Precip_Recovery_Base,
-         Recovery_Impact = Recovery_Impact/Precip_Recovery_Impact,
-         Stability = Stability/Precip_Stability) %>%
-  select(Obs:Recovery_Impact, Stability, -Recovery)
-
-####' ----- Create fourth set of plots (median diff test) ####
-## Medians bar plot
-sample_components %>%
-  group_by(Vegetation, Obs) %>%
-  summarise_at(vars(Impact:Stability), median) %>%
-  gather(key = Metric, value = Value, Impact:Stability) %>%
-  group_by(Vegetation, Metric) %>%
-  summarise(Median = median(Value),
-            Low = quantile(Value, 0.025),
-            High = quantile(Value, 0.975)) %>%
-  mutate(Metric = factor(
-    Metric, 
-    levels = c('Recovery_Base', 'Recovery_Impact', 'Impact', 'Stability'), 
-    labels = c('Recovery[base]', 'Recovery[impact]', 'Impact', 'Stability')
-  )) %>%
-  ggplot() +
-  facet_wrap(~Metric, labeller = label_parsed) +
-  geom_col(aes(x = Vegetation, y = Median, fill = Vegetation)) +
-  geom_errorbar(aes(x = Vegetation, ymin = Low, ymax = High), width = 0.8) +
-  scale_fill_manual(values = c('#948307', '#4d2d04', '#079467', '#7b9407')) +
+  scale_x_continuous(breaks = breaks_pretty(4)) +
+  scale_fill_manual(
+    values = c('#948307', '#4d2d04', '#079467', '#7b9407')
+  ) +
   theme_bw() +
   theme(
     text = element_text(family = "sans", size = 11), 
-    axis.text.x = element_blank(),
-    axis.title.x = element_blank(), 
-    axis.ticks.x = element_blank()
-    ) +
-  ggsave('./plots/median_cols.pdf', width = 15, height = 15, units = 'cm')
-## Test difference between medians
-median_diff <- median_diff_test()
-## Create dummy data to make tag labels
-dummy <- tibble(
-  Metric = c(
-    'Recovery[b]', 'Recovery[i]', 'Impact', 'Stability'
-  ),
-  Label = c(
-    'a', 'b', 'c', 'd'
+    legend.position = 'bottom',
+    legend.title = element_blank(),
+    axis.title = element_blank(),
+    axis.text.y = element_text(angle = 45)
+  ) +
+  ggsave(
+    "./plots/reg_coef_density.pdf", 
+    height = 18, 
+    width = 15, 
+    units = 'cm'
   )
+
+## Create ratio median distribution plot ----
+
+# Create dummy tibble to name and give labels in the plot
+dummy <- 
+  tibble(
+    metric = c('Recovery[b]', 'Recovery[i]', 'Impact', 'Stability'),
+    label = c('a', 'b', 'c', 'd'),
+    x_position = c(0.95, 0.725, 1.25, 1.305)
   ) %>%
-  mutate(Metric = factor(
-    Metric,
-    levels = c('Recovery[b]', 'Recovery[i]', 'Impact', 'Stability')
-  ))
-## Plot medians difference tests
-median_diff %>%
-  mutate(Metric = factor(
-    Metric, 
-    levels = c('Recovery_Base', 'Recovery_Impact', 'Impact', 'Stability'), 
-    labels = c('Recovery[b]', 'Recovery[i]', 'Impact', 'Stability')
-  )) %>%
+  mutate(
+    metric = factor(
+      metric, 
+      levels = c('Recovery[b]', 'Recovery[i]', 'Impact', 'Stability')
+    )
+  )
+
+# Create plot
+ratio_median %>%
+  mutate(
+    metric = factor(
+      metric, 
+      levels = c('Recovery[b]', 'Recovery[i]', 'Impact', 'Stability')
+    )
+  ) %>%
   ggplot() +
-  facet_wrap(~Metric, labeller = label_parsed) +
-  geom_line(aes(x = Value, y = Diff, color = Test, size = Test)) +
-  geom_vline(xintercept = 0, linetype = 'dashed') +
+  facet_wrap( 
+    ~ metric, 
+    labeller = label_parsed, 
+    scales = "free_x", 
+    ncol = 2
+  ) +
+  scale_x_continuous(breaks = breaks_pretty(3)) +
+  stat_density_ridges(
+    aes(x = median, y = veg_type, fill = veg_type),
+    alpha = 0.7,
+    quantile_lines = TRUE,
+    quantiles = c(0.025, 0.975)
+  ) +
   geom_text(
     data = dummy, 
-    aes(x = -0.15, y = 6.3, label = Label), 
+    aes(x = x_position, y = 5.5, label = label), 
     fontface = 'bold', 
     size = 4
   ) +
-  scale_color_manual(values = c('gray', 'black')) +
-  scale_size_manual(values = c(0.8, 1)) +
+  scale_fill_manual(
+    values = c('#948307', '#4d2d04', '#079467', '#7b9407')
+  ) +
   theme_bw() +
   theme(
     text = element_text(family = "sans", size = 11), 
-    legend.position = '', 
-    axis.title.y = element_blank()
+    legend.position = 'bottom',
+    legend.title = element_blank(),
+    axis.title = element_blank(),
+    axis.text.y = element_text(angle = 45)
   ) +
-  labs(x = 'Median Difference') +
-  ggsave('./plots/median_diff.pdf', width = 15, height = 15, units = 'cm')
-
-## Clear objects
-rm(fd1, fd2, fd3, fd4, median_diff, dummy)
-gc()
-
-## ------------------------------------------------------------------------- ##
-####* ------------------------------- END ------------------------------- *####
-## ------------------------------------------------------------------------- ##
+  ggsave(
+    "./plots/ratio_median_density.pdf", 
+    height = 15, 
+    width = 15, 
+    units = 'cm'
+  )
