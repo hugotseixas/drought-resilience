@@ -69,7 +69,7 @@ res_metrics_wide <- res_metrics %>%
 set.seed(2021)
 
 # Set number of samples to perform
-rep_number <- 500
+rep_number <- 5000
 
 # Set sample size
 sample_size <- 500
