@@ -555,7 +555,7 @@ dummy <-
     label = c(
       'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'
     ),
-    x_position = c(rep(-0.405, 4), rep(0.55, 4))
+    x_position = c(rep(-0.505, 4), rep(0.55, 4))
   ) %>%
   mutate(
     metric = factor(
