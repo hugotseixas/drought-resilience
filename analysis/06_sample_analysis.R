@@ -16,8 +16,6 @@
 library(arrow)
 library(rlang)
 library(glue)
-library(rstatix)
-library(kableExtra)
 library(cowplot)
 library(scales)
 library(ggridges)
