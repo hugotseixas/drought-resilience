@@ -88,7 +88,7 @@ scen_table <-
       levels = c("N", "D1", "D2", "D3")
     ),
     recovery_intensity = factor(
-      c("N", rep(c("N", "W1", "W2", "W3"), each = 4, times = 3)), 
+      c("N", rep(c("N", "W3", "W2", "W1"), each = 4, times = 3)), 
       levels = c("N", "W1", "W2", "W3")
     ),
     drought_duration = c(0, factor(rep(4:1, times = 12)))
