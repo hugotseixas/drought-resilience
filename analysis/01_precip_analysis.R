@@ -201,7 +201,7 @@ precip_annual %>%
   year_class <- 
     tibble(
       Class = factor(
-        c('D1', 'D2', 'D3', 'N', 'W1', 'W2', 'W3'), 
+        c('D1', 'D2', 'D3', 'N', 'W3', 'W2', 'W1'), 
         levels = c('D1', 'D2', 'D3', 'N', 'W1', 'W2', 'W3')
       ),
       Year = c(2012, 2015, 2001, 2017, 2000, 2005, 2006)
@@ -307,7 +307,7 @@ precip_annual %>%
   drop_na() %>%
   mutate(
     Class = factor(
-      c('D2', 'N', 'W2', 'D1', 'W3', 'D3', 'W1'), 
+      c('D2', 'N', 'W2', 'D1', 'W1', 'D3', 'W3'), 
       levels = c('D1', 'D2', 'D3', 'N', 'W1', 'W2', 'W3')
     )
   ) %>%
@@ -333,7 +333,7 @@ dry_years %>%
   ) %>% 
   mutate(
     Class = factor( # Change order of classes
-      c("D3", "D1", "D2", "N", "W1", "W2", "W3"),
+      c("D3", "D1", "D2", "N", "W3", "W2", "W1"),
       levels = c("D1", "D2", "D3", "N", "W1", "W2", "W3")
     )
   ) %>% 
@@ -355,8 +355,8 @@ dry_years %>%
 ## Organize scenarios information ----
 scenarios <- 
   read_delim('./data/scenarios_years.txt', delim = ',', col_names = FALSE) %>% 
-  mutate(Scen = dir('./data/scenarios/') %>% str_remove('.nc')) %>% 
-  gather(key = Time, value = Year, - Scen) %>% 
+  mutate(Scen = dir('./data/noah_out/scenarios/') %>% str_remove('.nc')) %>% 
+  gather(key = Time, value = Year, -Scen) %>%
   group_by(Time) %>%
   nest() %>%
   ungroup(cols = data) %>%
