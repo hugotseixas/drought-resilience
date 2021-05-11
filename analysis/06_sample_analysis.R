@@ -1,7 +1,10 @@
 # HEADER ----------------------------------------------------------------------
 #
 # Title:        Sampling analysis
-# Description:  
+# Description:  In this routine, we perform a series of random sampling
+#               of the data, in order to estimate confidence intervals of 
+#               linear regressions between resilience metrics calculated
+#               over GPP and Precipitation.
 #
 # Author:       Hugo Tameirao Seixas
 # Contact:      tameirao.hugo@gmail.com

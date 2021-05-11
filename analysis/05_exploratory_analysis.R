@@ -1,7 +1,8 @@
 # HEADER ----------------------------------------------------------------------
 #
 # Title:        Exploratory analysis
-# Description:  
+# Description:  In this routine, exploratory plots are created, such as scatter
+#               plots and box plots.
 #
 # Author:       Hugo Tameirao Seixas
 # Contact:      tameirao.hugo@gmail.com
